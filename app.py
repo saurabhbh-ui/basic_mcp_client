@@ -52,8 +52,9 @@ SERVERS = {
     "expense": {
         "url": "https://old-cyan-beetle.fastmcp.app/mcp",
         "transport": "streamable_http",
-    },
+    }
 }
+
 
 # System prompt for the assistant
 SYSTEM_PROMPT = (
@@ -62,8 +63,8 @@ SYSTEM_PROMPT = (
 )
 
 # Streamlit page configuration
-st.set_page_config(page_title="MCP Chat", page_icon="🧰", layout="centered")
-st.title("🧰 MCP Chat")
+st.set_page_config(page_title="MCP Chat", page_icon="🧰", layout="wide")
+st.title("🧰 MCP Chat with Intermediate Steps")
 
 # Helper to safely parse JSON args
 def _safe_parse_args(args):
@@ -73,6 +74,34 @@ def _safe_parse_args(args):
         except Exception:
             return args
     return args or {}
+
+# Helper to display tool calls
+def display_tool_calls(tool_calls):
+    """Display tool calls in an expandable section"""
+    if not tool_calls:
+        return
+    
+    with st.expander("🔧 Tool Calls", expanded=True):
+        for i, tc in enumerate(tool_calls, 1):
+            st.markdown(f"**Tool #{i}: {tc.get('name', 'Unknown')}**")
+            args = _safe_parse_args(tc.get('args'))
+            st.json(args)
+
+# Helper to display tool results
+def display_tool_results(tool_msgs):
+    """Display tool results in an expandable section"""
+    if not tool_msgs:
+        return
+    
+    with st.expander("✅ Tool Results", expanded=True):
+        for i, msg in enumerate(tool_msgs, 1):
+            st.markdown(f"**Result #{i}:**")
+            try:
+                # Try to parse and display as JSON if possible
+                content = json.loads(msg.content) if isinstance(msg.content, str) else msg.content
+                st.json(content)
+            except:
+                st.code(msg.content)
 
 # One-time initialization
 if "initialized" not in st.session_state:
@@ -94,31 +123,78 @@ if "initialized" not in st.session_state:
 
     # 4) Conversation state
     st.session_state.history = [SystemMessage(content=SYSTEM_PROMPT)]
+    
+    # 5) Display state for intermediate steps
+    st.session_state.messages_display = []  # For rendering
+    
     st.session_state.initialized = True
 
-# Render chat history (skip system + tool messages; hide intermediate AI with tool_calls)
-for msg in st.session_state.history:
-    if isinstance(msg, HumanMessage):
+# Sidebar with available tools
+with st.sidebar:
+    st.header("🔧 Available Tools")
+    if st.session_state.tools:
+        for i, tool in enumerate(st.session_state.tools, 1):
+            with st.expander(f"{i}. {tool.name}"):
+                st.write(tool.description)
+    else:
+        st.info("No tools loaded")
+    
+    st.divider()
+    
+    # Clear chat button
+    if st.button("🗑️ Clear Chat", use_container_width=True):
+        st.session_state.history = [SystemMessage(content=SYSTEM_PROMPT)]
+        st.session_state.messages_display = []
+        st.rerun()
+
+# Render chat history with intermediate steps
+for msg_data in st.session_state.messages_display:
+    msg_type = msg_data["type"]
+    
+    if msg_type == "user":
         with st.chat_message("user"):
-            st.markdown(msg.content)
-    elif isinstance(msg, AIMessage):
-        if getattr(msg, "tool_calls", None):
-            # Skip intermediate assistant messages that contain tool_calls
-            continue
+            st.markdown(msg_data["content"])
+    
+    elif msg_type == "assistant_thinking":
         with st.chat_message("assistant"):
-            st.markdown(msg.content)
-    # ToolMessage and SystemMessage are not rendered as bubbles
+            st.info(f"💭 **Thinking:** {msg_data['content']}")
+    
+    elif msg_type == "tool_calls":
+        with st.chat_message("assistant"):
+            display_tool_calls(msg_data["tool_calls"])
+    
+    elif msg_type == "tool_results":
+        with st.chat_message("assistant"):
+            display_tool_results(msg_data["tool_msgs"])
+    
+    elif msg_type == "assistant_final":
+        with st.chat_message("assistant"):
+            st.markdown(msg_data["content"])
 
 # Chat input
 user_text = st.chat_input("Type a message…")
 if user_text:
+    # Display user message
     with st.chat_message("user"):
         st.markdown(user_text)
+    
+    # Store in display history
+    st.session_state.messages_display.append({
+        "type": "user",
+        "content": user_text
+    })
+    
+    # Add to conversation history
     st.session_state.history.append(HumanMessage(content=user_text))
+
+    # Step counter for this interaction
+    step_num = 0
 
     # First pass: decide whether to call tools (synchronous invoke)
     try:
-        first = st.session_state.llm_with_tools.invoke(st.session_state.history)
+        with st.chat_message("assistant"):
+            with st.spinner("🤔 Processing..."):
+                first = st.session_state.llm_with_tools.invoke(st.session_state.history)
     except Exception as e:
         st.error(f"Model error: {e}")
         first = None
@@ -129,43 +205,107 @@ if user_text:
     tool_calls = getattr(first, "tool_calls", None)
 
     if not tool_calls:
-        # No tools → show & store assistant reply
+        # No tools → show & store assistant reply as final answer
         with st.chat_message("assistant"):
             st.markdown(first.content or "")
+        
+        st.session_state.messages_display.append({
+            "type": "assistant_final",
+            "content": first.content or ""
+        })
         st.session_state.history.append(first)
     else:
+        # Tools are being called - show intermediate steps
+        step_num += 1
+        
+        # Show AI thinking (if there's any content before tool calls)
+        if first.content:
+            with st.chat_message("assistant"):
+                st.info(f"💭 **Step {step_num} - Thinking:** {first.content}")
+            
+            st.session_state.messages_display.append({
+                "type": "assistant_thinking",
+                "content": first.content
+            })
+        
+        # Show tool calls
+        with st.chat_message("assistant"):
+            st.markdown(f"**📍 Step {step_num} - Calling Tools**")
+            display_tool_calls(tool_calls)
+        
+        st.session_state.messages_display.append({
+            "type": "tool_calls",
+            "tool_calls": tool_calls
+        })
+        
         # ── IMPORTANT ORDER ──
-        # 1) Append assistant message WITH tool_calls (do NOT render)
+        # 1) Append assistant message WITH tool_calls
         st.session_state.history.append(first)
 
-        # 2) Execute requested tools and append ToolMessages (do NOT render)
+        # 2) Execute requested tools and append ToolMessages
         tool_msgs = []
-        for tc in tool_calls:
-            name = tc.get("name")
-            args = _safe_parse_args(tc.get("args"))
-            tool = st.session_state.tool_by_name.get(name)
+        with st.chat_message("assistant"):
+            with st.spinner("⚙️ Executing tools..."):
+                for tc in tool_calls:
+                    name = tc.get("name")
+                    args = _safe_parse_args(tc.get("args"))
+                    tool = st.session_state.tool_by_name.get(name)
 
-            if tool is None:
-                # Tool not found; record an error ToolMessage to give the LLM context
-                tool_msgs.append(ToolMessage(tool_call_id=tc.get("id", ""), content=json.dumps({"error": f"Tool '{name}' not found"})))
-                continue
+                    if tool is None:
+                        # Tool not found; record an error ToolMessage
+                        tool_msgs.append(
+                            ToolMessage(
+                                tool_call_id=tc.get("id", ""),
+                                content=json.dumps({"error": f"Tool '{name}' not found"})
+                            )
+                        )
+                        continue
 
-            try:
-                # Use synchronous invoke to avoid event loop issues
-                res = tool.invoke(args)
-                tool_msgs.append(ToolMessage(tool_call_id=tc.get("id", ""), content=json.dumps(res)))
-            except Exception as e:
-                tool_msgs.append(ToolMessage(tool_call_id=tc.get("id", ""), content=json.dumps({"error": str(e)})))
-
+                    try:
+                        # Use synchronous invoke to avoid event loop issues
+                        res = tool.invoke(args)
+                        tool_msgs.append(
+                            ToolMessage(
+                                tool_call_id=tc.get("id", ""),
+                                content=json.dumps(res)
+                            )
+                        )
+                    except Exception as e:
+                        tool_msgs.append(
+                            ToolMessage(
+                                tool_call_id=tc.get("id", ""),
+                                content=json.dumps({"error": str(e)})
+                            )
+                        )
+        
+        # Show tool results
+        with st.chat_message("assistant"):
+            display_tool_results(tool_msgs)
+        
+        st.session_state.messages_display.append({
+            "type": "tool_results",
+            "tool_msgs": tool_msgs
+        })
+        
         st.session_state.history.extend(tool_msgs)
 
-        # 3) Final assistant reply using tool outputs → render & store (synchronous invoke)
+        # 3) Final assistant reply using tool outputs
         try:
-            final = st.session_state.llm.invoke(st.session_state.history)
+            with st.chat_message("assistant"):
+                with st.spinner("💬 Generating final response..."):
+                    final = st.session_state.llm.invoke(st.session_state.history)
         except Exception as e:
             st.error(f"Model error during final response: {e}")
             final = AIMessage(content="Sorry, I encountered an error generating the response.")
 
+        # Show final answer
         with st.chat_message("assistant"):
+            st.success(f"🎯 **Final Answer:**")
             st.markdown(final.content or "")
+        
+        st.session_state.messages_display.append({
+            "type": "assistant_final",
+            "content": final.content or ""
+        })
+        
         st.session_state.history.append(AIMessage(content=final.content or ""))
