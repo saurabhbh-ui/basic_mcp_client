@@ -1,0 +1,8 @@
+langchain
+langchain-core
+langchain-openai
+langchain-experimental
+pydantic
+python-dotenv
+langchain-mcp-adapters
+langchain-community

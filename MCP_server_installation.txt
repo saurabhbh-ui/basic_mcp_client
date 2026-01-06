@@ -1,0 +1,87 @@
+python -m venv .venv
+
+.venv/
+
+
+.\.venv\Scripts\Activate.ps1
+
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+
+.\.venv\Scripts\Activate.ps1
+
+
+
+python -m pip install --upgrade pip
+
+pip install uv
+
+
+uv --version
+
+
+uv add -r requirements.txt
+
+uv pip install fastmcp
+
+python -c "import fastmcp; print(fastmcp.__version__)"
+
+uv pip freeze > requirements.txt
+
+
+
+from fastmcp import FastMCP
+
+mcp = FastMCP("dev-server")
+
+@mcp.tool()
+def hello(name: str) -> str:
+    return f"Hello {name} from FastMCP!"
+
+if __name__ == "__main__":
+    mcp.run()
+
+
+
+########################### Start FASTMCP DEV MODE
+
+$env:DANGEROUSLY_OMIT_AUTH="true"
+
+fastmcp dev server.py
+
+
+### Install MCP Inspector globally
+
+npm install -g @modelcontextprotocol/inspector
+
+mcp-inspector --help
+
+
+mcp-inspector
+
+
+fastmcp dev server.py
+
+
+
+
+
+✅ Disable auth using environment variable (RECOMMENDED for local dev)
+PowerShell (Windows)
+
+Run this before starting FastMCP:
+
+$env:DANGEROUSLY_OMIT_AUTH="true"
+fastmcp dev server.py
+
+
+
+
+
+
+
+
+
+
+

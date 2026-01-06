@@ -1,2 +1,2 @@
-# basic_mcp_client
-Basic MCP client
+# mcp_calculator
+mcp_calculator
